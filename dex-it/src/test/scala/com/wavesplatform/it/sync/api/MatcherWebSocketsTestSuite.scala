@@ -15,6 +15,7 @@ import com.wavesplatform.it.MatcherSuiteBase
 import play.api.libs.json.Json
 
 import scala.collection.immutable.TreeMap
+import scala.collection.mutable.ListBuffer
 
 class MatcherWebSocketsTestSuite extends MatcherSuiteBase with HasWebSockets {
 
@@ -26,6 +27,21 @@ class MatcherWebSocketsTestSuite extends MatcherSuiteBase with HasWebSockets {
 
   override protected def beforeAll(): Unit = {
     wavesNode1.start()
+
+    wavesNode1.restartWithNewSuiteConfig(
+      ConfigFactory.parseString(
+        s"""waves.dex.grpc.integration {
+           |  balance-changes-batch-linger = 300ms
+           |}
+           |waves.miner.minimal-block-generation-offset = 30s
+           |waves.blockchain.genesis {
+           |  average-block-delay = 60s
+           |}
+           |""".stripMargin
+      )
+    )
+
+
     broadcastAndAwait(IssueBtcTx, IssueUsdTx)
     broadcastAndAwait(mkTransfer(alice, carol, 100.waves, Waves), mkTransfer(bob, carol, 1.btc, btc))
     dex1.start()
@@ -68,6 +84,39 @@ class MatcherWebSocketsTestSuite extends MatcherSuiteBase with HasWebSockets {
       log.info(s"Got message: $text")
       Json.parse(text).as[WsOrderBook]
     }
+  }
+
+  var messages = new ListBuffer[String]()
+
+  for (i <- 1 to 100) s"test $i" in {
+    val accS = createAccountWithBalance(150.006.waves -> Waves)
+    val accB = createAccountWithBalance(225.usd -> usd)
+   // val wsc  = createAccountUpdatesWsConnection(accB)
+
+    val wsc = mkWebSocketAuthenticatedConnection(accB, dex1)
+
+    placeAndAwaitAtDex(mkOrderDP(accS, wavesUsdPair, SELL, 100.waves, 1.5))
+    placeAndAwaitAtDex(mkOrderDP(accS, wavesUsdPair, SELL, 50.waves, 1.5))
+    placeAndAwaitAtNode(mkOrderDP(accB, wavesUsdPair, BUY, 150.waves, 1.5))
+
+    messages += wsc.getMessagesBuffer.mkString
+
+//    wsc.getMessagesBuffer should matchTo {
+//      Seq(
+////        WsAddressState(Map(Waves -> WsBalances(tradable = 0, reserved = 0), usd -> WsBalances(tradable = 225.usd, reserved = 0))),
+////        WsAddressState(Map(usd   -> WsBalances(tradable = 0, reserved = 225.usd))),
+////        WsAddressState(Map(usd   -> WsBalances(tradable = 0, reserved = 75.usd))),
+////        WsAddressState(Map(Waves -> WsBalances(tradable = 149.997.waves, reserved = 0), usd -> WsBalances(tradable = 0, reserved = 0)))
+//      )
+//    }
+  }
+
+  "print results" in {
+    import java.io._
+    val pw = new PrintWriter(new File("result.txt"))
+
+    messages.toList.foreach(m => pw.write(s"$m\n"))
+    pw.close
   }
 
   "Connection should be established" in {
